@@ -52,7 +52,61 @@ def load_c3d_file(uploaded_file):
     try:
         if not C3D_AVAILABLE:
             st.error("C3D library not available. Please install it using: pip install c3d")
+    def load_c3d_file_alternative(uploaded_file):
+    """
+    Alternative C3D loading method using different approach
+    """
+    try:
+        bytes_data = uploaded_file.read()
+        file_obj = io.BytesIO(bytes_data)
+        
+        reader = c3d.Reader(file_obj)
+        
+        # Get basic info
+        frame_rate = reader.header.frame_rate
+        
+        # Alternative method: read all frames at once
+        frames = list(reader.read_frames())
+        
+        if not frames:
+            st.error("No frames found in C3D file")
             return None, None, None
+        
+        # Get marker labels
+        marker_labels = []
+        for label in reader.point_labels:
+            cleaned_label = label.strip().replace('\x00', '')
+            if cleaned_label:
+                marker_labels.append(cleaned_label)
+        
+        # Process frames
+        marker_data = []
+        for frame_idx, frame_tuple in enumerate(frames):
+            points = frame_tuple[0] if len(frame_tuple) > 0 else None
+            
+            frame_data = {'frame': frame_idx}
+            
+            if points is not None and hasattr(points, 'shape') and len(points.shape) >= 2:
+                for marker_idx, label in enumerate(marker_labels):
+                    if marker_idx < points.shape[1] and points.shape[0] >= 3:
+                        try:
+                            x, y, z = float(points[0, marker_idx]), float(points[1, marker_idx]), float(points[2, marker_idx])
+                            frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
+                            frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
+                            frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
+                        except:
+                            frame_data[f"{label}_X"] = 0.0
+                            frame_data[f"{label}_Y"] = 0.0
+                            frame_data[f"{label}_Z"] = 0.0
+            
+            marker_data.append(frame_data)
+        
+        df = pd.DataFrame(marker_data)
+        return df, marker_labels, frame_rate
+        
+    except Exception as e:
+        st.error(f"Alternative loading method also failed: {str(e)}")
+        return None, None, None
         
         # Read the uploaded file
         bytes_data = uploaded_file.read()
@@ -63,33 +117,95 @@ def load_c3d_file(uploaded_file):
         # Read C3D file
         reader = c3d.Reader(file_obj)
         
+        # Debug information
+        st.info(f"📊 C3D File Info:")
+        st.info(f"  • Frame rate: {reader.header.frame_rate} Hz")
+        st.info(f"  • Point count: {reader.header.point_count}")
+        st.info(f"  • Frame count: {reader.header.last_frame - reader.header.first_frame + 1}")
+        
         # Extract marker data
         marker_data = []
         marker_labels = []
         frame_rate = reader.header.frame_rate
         
-        # Get marker labels
+        # Get marker labels and clean them
         for i, label in enumerate(reader.point_labels):
-            marker_labels.append(label.strip())
+            cleaned_label = label.strip().replace('\x00', '')  # Remove null characters
+            if cleaned_label:  # Only add non-empty labels
+                marker_labels.append(cleaned_label)
+        
+        st.info(f"  • Markers found: {len(marker_labels)}")
+        if len(marker_labels) > 0:
+            st.info(f"  • First few markers: {marker_labels[:5]}")
         
         # Extract point data
-        for frame_idx, (points, analog) in enumerate(reader.read_frames()):
+        for frame_idx, frame_data_tuple in enumerate(reader.read_frames()):
+            # Handle different return formats from read_frames()
+            if len(frame_data_tuple) >= 2:
+                points = frame_data_tuple[0]
+                analog = frame_data_tuple[1] if len(frame_data_tuple) > 1 else None
+            else:
+                points = frame_data_tuple[0]
+                analog = None
+            
             frame_data = {'frame': frame_idx}
-            for marker_idx, label in enumerate(marker_labels):
-                if marker_idx < points.shape[1]:
-                    x, y, z = points[:3, marker_idx]
-                    frame_data[f"{label}_X"] = x
-                    frame_data[f"{label}_Y"] = y
-                    frame_data[f"{label}_Z"] = z
+            
+            # Check if points data is valid
+            if points is not None and len(points.shape) >= 2:
+                for marker_idx, label in enumerate(marker_labels):
+                    if marker_idx < points.shape[1]:
+                        try:
+                            x, y, z = points[:3, marker_idx]
+                            # Check for valid data (not NaN or extremely large values)
+                            if not (np.isnan(x) or np.isnan(y) or np.isnan(z)):
+                                frame_data[f"{label}_X"] = float(x)
+                                frame_data[f"{label}_Y"] = float(y)
+                                frame_data[f"{label}_Z"] = float(z)
+                            else:
+                                frame_data[f"{label}_X"] = 0.0
+                                frame_data[f"{label}_Y"] = 0.0
+                                frame_data[f"{label}_Z"] = 0.0
+                        except (IndexError, ValueError) as e:
+                            # Handle invalid marker data
+                            frame_data[f"{label}_X"] = 0.0
+                            frame_data[f"{label}_Y"] = 0.0
+                            frame_data[f"{label}_Z"] = 0.0
+            
             marker_data.append(frame_data)
+            
+            # Limit frames for very large files (optional safety measure)
+            if frame_idx > 10000:  # Limit to ~100 seconds at 100Hz
+                st.warning(f"⚠️ Large file detected. Loaded first {frame_idx} frames.")
+                break
         
         df = pd.DataFrame(marker_data)
+        
+        # Remove empty columns if any
+        df = df.dropna(axis=1, how='all')
         
         return df, marker_labels, frame_rate
         
     except Exception as e:
         st.error(f"Error loading C3D file: {str(e)}")
-        st.error(traceback.format_exc())
+        
+        # More detailed error information
+        error_details = traceback.format_exc()
+        
+        with st.expander("🔍 Detailed Error Information"):
+            st.code(error_details)
+            st.markdown("""
+            **Common C3D File Issues:**
+            - File format not supported by the c3d library
+            - Corrupted or incomplete file
+            - Different C3D version/format than expected
+            - File contains no valid marker data
+            
+            **Try:**
+            1. Export your file in a different C3D format from Qualisys
+            2. Check if the file opens in other C3D viewers
+            3. Use the demo data to test the application features
+            """)
+        
         return None, None, None
 
 def create_mock_data():
