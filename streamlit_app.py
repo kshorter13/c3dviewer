@@ -395,9 +395,56 @@ def create_mock_data():
     df = pd.DataFrame(data)
     return df, markers, 100  # 100 Hz sample rate
 
-def plot_3d_markers(df, markers, frame_idx):
+def calculate_movement_bounds(df, markers, padding_percent=15):
     """
-    Create 3D plot of marker positions for a specific frame
+    Calculate the min/max bounds for all marker movements with padding
+    """
+    all_x, all_y, all_z = [], [], []
+    
+    # Collect all coordinate values across all markers and frames
+    for marker in markers:
+        x_col = f"{marker}_X"
+        y_col = f"{marker}_Y"
+        z_col = f"{marker}_Z"
+        
+        if x_col in df.columns:
+            # Get non-zero values (valid coordinates)
+            x_values = df[x_col][df[x_col] != 0].values
+            y_values = df[y_col][df[y_col] != 0].values
+            z_values = df[z_col][df[z_col] != 0].values
+            
+            all_x.extend(x_values)
+            all_y.extend(y_values)
+            all_z.extend(z_values)
+    
+    if not all_x:  # No valid data found
+        return None
+    
+    # Calculate min/max for each axis
+    x_min, x_max = min(all_x), max(all_x)
+    y_min, y_max = min(all_y), max(all_y)
+    z_min, z_max = min(all_z), max(all_z)
+    
+    # Add padding
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+    
+    x_padding = x_range * (padding_percent / 100)
+    y_padding = y_range * (padding_percent / 100)
+    z_padding = z_range * (padding_percent / 100)
+    
+    bounds = {
+        'x_range': [x_min - x_padding, x_max + x_padding],
+        'y_range': [y_min - y_padding, y_max + y_padding],
+        'z_range': [z_min - z_padding, z_max + z_padding]
+    }
+    
+    return bounds
+
+def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
+    """
+    Create 3D plot of marker positions for a specific frame with fixed scaling
     """
     fig = go.Figure()
     
@@ -412,31 +459,51 @@ def plot_3d_markers(df, markers, frame_idx):
             y = df.iloc[frame_idx][y_col]
             z = df.iloc[frame_idx][z_col]
             
-            fig.add_trace(go.Scatter3d(
-                x=[x], y=[y], z=[z],
-                mode='markers+text',
-                name=marker,
-                text=[marker],
-                textposition="top center",
-                marker=dict(size=8)
-            ))
+            # Only plot if coordinates are valid (non-zero)
+            if x != 0 or y != 0 or z != 0:
+                fig.add_trace(go.Scatter3d(
+                    x=[x], y=[y], z=[z],
+                    mode='markers+text',
+                    name=marker,
+                    text=[marker],
+                    textposition="top center",
+                    marker=dict(size=8),
+                    showlegend=True
+                ))
+    
+    # Set up the layout with fixed axis ranges if bounds are provided
+    scene_dict = {
+        'xaxis_title': 'X (mm)',
+        'yaxis_title': 'Y (mm)',
+        'zaxis_title': 'Z (mm)',
+        'aspectmode': 'cube'
+    }
+    
+    if movement_bounds:
+        scene_dict.update({
+            'xaxis': dict(range=movement_bounds['x_range'], title='X (mm)'),
+            'yaxis': dict(range=movement_bounds['y_range'], title='Y (mm)'),
+            'zaxis': dict(range=movement_bounds['z_range'], title='Z (mm)')
+        })
     
     fig.update_layout(
         title=f'3D Marker Positions - Frame {frame_idx}',
-        scene=dict(
-            xaxis_title='X (m)',
-            yaxis_title='Y (m)',
-            zaxis_title='Z (m)',
-            aspectmode='cube'
-        ),
-        height=600
+        scene=scene_dict,
+        height=600,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
     )
     
     return fig
 
-def plot_trajectory(df, markers, selected_markers):
+def plot_trajectory(df, markers, selected_markers, movement_bounds=None):
     """
-    Plot trajectory of selected markers over time
+    Plot trajectory of selected markers over time with fixed scaling
     """
     fig = go.Figure()
     
@@ -446,22 +513,38 @@ def plot_trajectory(df, markers, selected_markers):
         z_col = f"{marker}_Z"
         
         if x_col in df.columns:
-            fig.add_trace(go.Scatter3d(
-                x=df[x_col],
-                y=df[y_col],
-                z=df[z_col],
-                mode='lines',
-                name=f"{marker} trajectory",
-                line=dict(width=4)
-            ))
+            # Get valid (non-zero) coordinates
+            valid_mask = (df[x_col] != 0) | (df[y_col] != 0) | (df[z_col] != 0)
+            
+            if valid_mask.any():
+                fig.add_trace(go.Scatter3d(
+                    x=df[x_col][valid_mask],
+                    y=df[y_col][valid_mask],
+                    z=df[z_col][valid_mask],
+                    mode='lines+markers',
+                    name=f"{marker} trajectory",
+                    line=dict(width=4),
+                    marker=dict(size=3)
+                ))
+    
+    # Set up the layout with fixed axis ranges if bounds are provided
+    scene_dict = {
+        'xaxis_title': 'X (mm)',
+        'yaxis_title': 'Y (mm)',
+        'zaxis_title': 'Z (mm)',
+        'aspectmode': 'cube'
+    }
+    
+    if movement_bounds:
+        scene_dict.update({
+            'xaxis': dict(range=movement_bounds['x_range'], title='X (mm)'),
+            'yaxis': dict(range=movement_bounds['y_range'], title='Y (mm)'),
+            'zaxis': dict(range=movement_bounds['z_range'], title='Z (mm)')
+        })
     
     fig.update_layout(
         title='Marker Trajectories',
-        scene=dict(
-            xaxis_title='X (m)',
-            yaxis_title='Y (m)',
-            zaxis_title='Z (m)'
-        ),
+        scene=scene_dict,
         height=600
     )
     
