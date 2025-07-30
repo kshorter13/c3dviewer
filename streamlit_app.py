@@ -348,10 +348,20 @@ def load_c3d_specification_compliant(uploaded_file):
                 for frame_num in key_frames:
                     if frame_num < len(df):
                         frame_sample = df.iloc[frame_num]
-                        hip_x = frame_sample.get('Hip_X', 'Not found')
-                        hip_y = frame_sample.get('Hip_Y', 'Not found')
-                        hip_z = frame_sample.get('Hip_Z', 'Not found')
-                        st.info(f"  • Frame {frame_num} Hip: X={hip_x:.1f}mm, Y={hip_y:.1f}mm, Z={hip_z:.1f}mm")
+                        # Use the first available marker instead of hardcoding "Hip"
+                        first_marker = marker_labels[0] if marker_labels else None
+                        if first_marker:
+                            x_val = frame_sample.get(f"{first_marker}_X", 0)
+                            y_val = frame_sample.get(f"{first_marker}_Y", 0)
+                            z_val = frame_sample.get(f"{first_marker}_Z", 0)
+                            
+                            # Only format if we have numeric values
+                            if isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float)):
+                                st.info(f"  • Frame {frame_num} {first_marker}: X={x_val:.1f}mm, Y={y_val:.1f}mm, Z={z_val:.1f}mm")
+                            else:
+                                st.info(f"  • Frame {frame_num} {first_marker}: X={x_val}, Y={y_val}, Z={z_val}")
+                        else:
+                            st.warning("  • No markers found to display sample coordinates")
                 
                 return df, marker_labels, frame_rate
             else:
