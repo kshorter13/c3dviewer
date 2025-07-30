@@ -1,11 +1,20 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import io
 import traceback
+
+# Try to import plotly with error handling
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError as e:
+    PLOTLY_AVAILABLE = False
+    st.error(f"Plotly import failed: {str(e)}")
+    st.error("Please ensure 'plotly' is in your requirements.txt file")
+    st.stop()  # Stop execution if plotly is not available
 
 # Try to import C3D library - if not available, we'll handle it gracefully
 try:
