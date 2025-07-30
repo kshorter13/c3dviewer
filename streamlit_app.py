@@ -45,70 +45,7 @@ def calculate_angle_3d(p1, p2, p3):
     
     return angle_deg
 
-def load_c3d_file_alternative(uploaded_file):
-    """
-    Alternative C3D loading method using different approach
-    """
-    try:
-        # Reset file pointer
-        uploaded_file.seek(0)
-        bytes_data = uploaded_file.read()
-        file_obj = io.BytesIO(bytes_data)
-        
-        reader = c3d.Reader(file_obj)
-        
-        # Get basic info
-        frame_rate = reader.header.frame_rate
-        
-        # Get marker labels
-        marker_labels = []
-        for label in reader.point_labels:
-            cleaned_label = label.strip().replace('\x00', '')
-            if cleaned_label:
-                marker_labels.append(cleaned_label)
-        
-        st.info(f"🔄 Alternative method - trying direct data access...")
-        
-        # Try to access point data directly
-        if hasattr(reader, 'point_data') and reader.point_data is not None:
-            st.info(f"  • Found point_data attribute with shape: {reader.point_data.shape}")
-            point_data = reader.point_data
-            
-            marker_data = []
-            for frame_idx in range(point_data.shape[0]):
-                frame_data = {'frame': frame_idx}
-                
-                for marker_idx, label in enumerate(marker_labels):
-                    if marker_idx < point_data.shape[1]:
-                        try:
-                            # Point data is usually in format [frame, marker, coordinates]
-                            coords = point_data[frame_idx, marker_idx, :3]
-                            x, y, z = float(coords[0]), float(coords[1]), float(coords[2])
-                            
-                            frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
-                            frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
-                            frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
-                        except:
-                            frame_data[f"{label}_X"] = 0.0
-                            frame_data[f"{label}_Y"] = 0.0
-                            frame_data[f"{label}_Z"] = 0.0
-                
-                marker_data.append(frame_data)
-            
-            df = pd.DataFrame(marker_data)
-            if not df.empty and len([col for col in df.columns if col.endswith('_X')]) > 0:
-                return df, marker_labels, frame_rate
-        
-        # If direct access doesn't work, try iterating through frames again
-        st.info("  • Trying frame iteration method...")
-        
-        frames_list = []
-        try:
-            for frame_data in reader.read_frames():
-                frames_list.append(frame_data)
-        except:
-            st.error("  • Frame iteration failed")
-    def debug_c3d_structure(uploaded_file):
+def debug_c3d_structure(uploaded_file):
     """
     Debug function to inspect the actual C3D file structure
     """
@@ -127,7 +64,7 @@ def load_c3d_file_alternative(uploaded_file):
         st.write(f"- First frame: {reader.header.first_frame}")
         st.write(f"- Last frame: {reader.header.last_frame}")
         st.write(f"- Point count: {reader.header.point_count}")
-        st.write(f"- Point scale: {reader.header.point_scale}")
+        st.write(f"- Point scale: {getattr(reader.header, 'point_scale', 'Not found')}")
         
         # Show available attributes
         st.markdown("#### Available Reader Attributes:")
@@ -141,11 +78,13 @@ def load_c3d_file_alternative(uploaded_file):
         if hasattr(reader, 'point_data') and reader.point_data is not None:
             st.write(f"✅ point_data found with shape: {reader.point_data.shape}")
             st.write(f"✅ point_data dtype: {reader.point_data.dtype}")
-            # Show sample from frame 99 if it exists
-            if reader.point_data.shape[0] > 99:
-                frame_99_data = reader.point_data[99]
-                st.write(f"✅ Frame 99 raw data shape: {frame_99_data.shape}")
-                st.write(f"✅ Frame 99 sample values: {frame_99_data}")
+            # Show sample from a few frames if they exist
+            sample_frames = [0, 10, 99] if reader.point_data.shape[0] > 99 else [0, min(10, reader.point_data.shape[0]-1)]
+            for frame_num in sample_frames:
+                if frame_num < reader.point_data.shape[0]:
+                    frame_data = reader.point_data[frame_num]
+                    st.write(f"✅ Frame {frame_num} raw data shape: {frame_data.shape}")
+                    st.write(f"✅ Frame {frame_num} sample values: {frame_data}")
         else:
             st.write("❌ No point_data attribute found")
         
@@ -153,8 +92,9 @@ def load_c3d_file_alternative(uploaded_file):
         st.markdown("#### Frame Reading Test:")
         try:
             frame_count = 0
+            sample_frames_to_show = [0, 1, 2, 99]  # Show these specific frames
             for frame_data in reader.read_frames():
-                if frame_count < 3 or frame_count == 99:  # Show first 3 frames and frame 99
+                if frame_count in sample_frames_to_show:
                     st.write(f"**Frame {frame_count}:**")
                     st.write(f"  - Type: {type(frame_data)}")
                     st.write(f"  - Length: {len(frame_data) if hasattr(frame_data, '__len__') else 'N/A'}")
@@ -245,7 +185,7 @@ def load_c3d_file_fixed(uploaded_file):
                 marker_data.append(frame_data)
                 
                 # Show progress for large files
-                if frame_idx % 1000 == 0:
+                if frame_idx % 1000 == 0 and frame_idx > 0:
                     st.info(f"  Processing frame {frame_idx}...")
                 
                 # Safety limit
@@ -318,11 +258,13 @@ def load_c3d_file_fixed(uploaded_file):
             st.success(f"✅ Fixed method: Extracted {len(coord_columns)} coordinates")
             st.info(f"  • Non-zero values: {non_zero_count}/{total_count} ({100*non_zero_count/total_count:.1f}%)")
             
-            # Show frame 99 data if available
-            if len(df) > 99:
-                frame_99 = df.iloc[99]
-                hip_x = frame_99.get('Hip_X', 'Not found')
-                st.info(f"  • Frame 99 Hip_X: {hip_x}")
+            # Show sample data from various frames
+            sample_frames = [0, 10, min(99, len(df)-1)] if len(df) > 10 else [0]
+            for frame_num in sample_frames:
+                if frame_num < len(df):
+                    frame_sample = df.iloc[frame_num]
+                    hip_x = frame_sample.get('Hip_X', 'Not found')
+                    st.info(f"  • Frame {frame_num} Hip_X: {hip_x}")
             
             return df, marker_labels, frame_rate
         else:
@@ -333,79 +275,10 @@ def load_c3d_file_fixed(uploaded_file):
         st.error(f"Fixed loading method failed: {str(e)}")
         st.error(traceback.format_exc())
         return None, None, None
-        
-        if not frames_list:
-            st.error("  • No frames found")
-            return None, None, None
-        
-        st.info(f"  • Successfully read {len(frames_list)} frames")
-        
-        # Process frames
-        marker_data = []
-        for frame_idx, frame_tuple in enumerate(frames_list):
-            frame_data = {'frame': frame_idx}
-            
-            # Try different ways to extract point data
-            points = None
-            if isinstance(frame_tuple, tuple) and len(frame_tuple) > 0:
-                points = frame_tuple[0]
-            elif isinstance(frame_tuple, (list, np.ndarray)):
-                points = frame_tuple
-            
-            if frame_idx == 0:
-                st.info(f"  • Sample frame data type: {type(points)}")
-                if hasattr(points, 'shape'):
-                    st.info(f"  • Sample frame shape: {points.shape}")
-            
-            # Extract coordinates
-            if points is not None:
-                if hasattr(points, 'shape') and len(points.shape) >= 2:
-                    # Standard numpy array format [coordinates, markers]
-                    for marker_idx, label in enumerate(marker_labels):
-                        if marker_idx < points.shape[1]:
-                            try:
-                                x, y, z = float(points[0, marker_idx]), float(points[1, marker_idx]), float(points[2, marker_idx])
-                                frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
-                                frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
-                                frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
-                            except:
-                                frame_data[f"{label}_X"] = 0.0
-                                frame_data[f"{label}_Y"] = 0.0
-                                frame_data[f"{label}_Z"] = 0.0
-                
-                elif isinstance(points, (list, tuple)):
-                    # List/tuple format
-                    for marker_idx, label in enumerate(marker_labels):
-                        if marker_idx < len(points):
-                            try:
-                                point = points[marker_idx]
-                                if isinstance(point, (list, tuple, np.ndarray)) and len(point) >= 3:
-                                    x, y, z = float(point[0]), float(point[1]), float(point[2])
-                                    frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
-                                    frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
-                                    frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
-                                else:
-                                    frame_data[f"{label}_X"] = 0.0
-                                    frame_data[f"{label}_Y"] = 0.0
-                                    frame_data[f"{label}_Z"] = 0.0
-                            except:
-                                frame_data[f"{label}_X"] = 0.0
-                                frame_data[f"{label}_Y"] = 0.0
-                                frame_data[f"{label}_Z"] = 0.0
-            
-            marker_data.append(frame_data)
-        
-        df = pd.DataFrame(marker_data)
-        return df, marker_labels, frame_rate
-        
-    except Exception as e:
-        st.error(f"Alternative loading method failed: {str(e)}")
-        st.error(traceback.format_exc())
-        return None, None, None
 
 def load_c3d_file(uploaded_file):
     """
-    Load C3D file and extract marker data
+    Original C3D loading method with improvements
     """
     if not C3D_AVAILABLE:
         st.error("C3D library not available. Please install it using: pip install c3d")
@@ -492,45 +365,12 @@ def load_c3d_file(uploaded_file):
                                 frame_data[f"{label}_Y"] = 0.0
                                 frame_data[f"{label}_Z"] = 0.0
                 
-                elif isinstance(points, (list, tuple)) and len(points) > 0:
-                    # Handle list/tuple format
-                    for marker_idx, label in enumerate(marker_labels):
-                        if marker_idx < len(points):
-                            try:
-                                point = points[marker_idx]
-                                if isinstance(point, (list, tuple)) and len(point) >= 3:
-                                    x, y, z = float(point[0]), float(point[1]), float(point[2])
-                                    frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
-                                    frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
-                                    frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
-                                else:
-                                    frame_data[f"{label}_X"] = 0.0
-                                    frame_data[f"{label}_Y"] = 0.0
-                                    frame_data[f"{label}_Z"] = 0.0
-                            except:
-                                frame_data[f"{label}_X"] = 0.0
-                                frame_data[f"{label}_Y"] = 0.0
-                                frame_data[f"{label}_Z"] = 0.0
-                
                 else:
-                    # Unknown format - try to extract from reader directly
-                    try:
-                        # Alternative approach: get point data directly from reader
-                        point_data = reader.point_data
-                        if point_data is not None and hasattr(point_data, 'shape'):
-                            if frame_idx < point_data.shape[0]:
-                                for marker_idx, label in enumerate(marker_labels):
-                                    if marker_idx < point_data.shape[1]:
-                                        x, y, z = point_data[frame_idx, marker_idx, :3]
-                                        frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
-                                        frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
-                                        frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
-                    except:
-                        # Fill with zeros if we can't extract data
-                        for label in marker_labels:
-                            frame_data[f"{label}_X"] = 0.0
-                            frame_data[f"{label}_Y"] = 0.0
-                            frame_data[f"{label}_Z"] = 0.0
+                    # Fill with zeros if we can't extract data
+                    for label in marker_labels:
+                        frame_data[f"{label}_X"] = 0.0
+                        frame_data[f"{label}_Y"] = 0.0
+                        frame_data[f"{label}_Z"] = 0.0
             
             marker_data.append(frame_data)
             
@@ -564,185 +404,6 @@ def load_c3d_file(uploaded_file):
         
     except Exception as e:
         st.error(f"Primary C3D loading method failed: {str(e)}")
-        
-        # Try alternative loading method
-        st.info("🔄 Trying alternative loading method...")
-        try:
-            # Reset the uploaded file for the alternative method
-            uploaded_file.seek(0)
-            result = load_c3d_file_alternative(uploaded_file)
-            if result[0] is not None:
-                coord_columns = [col for col in result[0].columns if col.endswith(('_X', '_Y', '_Z'))]
-                if len(coord_columns) > 0:
-                    return result
-        except Exception as alt_error:
-            st.error(f"Alternative method also failed: {str(alt_error)}")
-        
-        # Try third method - raw C3D access
-        st.info("🔄 Trying raw data access method...")
-        try:
-            uploaded_file.seek(0)
-            result = load_c3d_file_raw(uploaded_file)
-            if result[0] is not None:
-                return result
-        except Exception as raw_error:
-            st.error(f"Raw access method failed: {str(raw_error)}")
-        
-        # More detailed error information
-        error_details = traceback.format_exc()
-        
-        with st.expander("🔍 Detailed Error Information"):
-            st.code(error_details)
-            st.markdown("""
-            **Common C3D File Issues:**
-            - File format not supported by the c3d library
-            - Corrupted or incomplete file
-            - Different C3D version/format than expected
-            - File contains no valid marker data
-            - Data is stored in an unexpected format
-            
-            **Try:**
-            1. Export your file in a different C3D format from Qualisys
-            2. Check if the file opens in other C3D viewers
-            3. Use the demo data to test the application features
-            4. Try opening the file in Qualisys Track Manager and re-export
-            """)
-        
-        return None, None, None
-
-def load_c3d_file_raw(uploaded_file):
-    """
-    Raw C3D loading method - tries to access data structures directly
-    """
-    try:
-        # Reset file pointer
-        uploaded_file.seek(0)
-        bytes_data = uploaded_file.read()
-        file_obj = io.BytesIO(bytes_data)
-        
-        reader = c3d.Reader(file_obj)
-        
-        st.info("🔄 Raw method - inspecting C3D structure...")
-        
-        # Get basic info
-        frame_rate = reader.header.frame_rate
-        first_frame = reader.header.first_frame
-        last_frame = reader.header.last_frame
-        point_count = reader.header.point_count
-        
-        # Get marker labels
-        marker_labels = []
-        for label in reader.point_labels:
-            cleaned_label = label.strip().replace('\x00', '')
-            if cleaned_label:
-                marker_labels.append(cleaned_label)
-        
-        st.info(f"  • Will extract frames {first_frame} to {last_frame}")
-        st.info(f"  • Expected {point_count} points per frame")
-        
-        # Try accessing data through different methods
-        marker_data = []
-        
-        # Method 1: Try using reader parameters directly
-        if hasattr(reader, 'read'):
-            try:
-                # Reset reader
-                reader.seek(first_frame)
-                
-                for frame_idx in range(last_frame - first_frame + 1):
-                    frame_data = {'frame': frame_idx}
-                    
-                    try:
-                        # Try to read one frame
-                        frame_info = next(reader.read_frames())
-                        
-                        if isinstance(frame_info, tuple) and len(frame_info) > 0:
-                            points = frame_info[0]
-                            
-                            # Debug the structure
-                            if frame_idx == 0:
-                                st.info(f"  • Raw frame data type: {type(points)}")
-                                if hasattr(points, 'shape'):
-                                    st.info(f"  • Raw frame shape: {points.shape}")
-                                elif isinstance(points, (list, tuple)):
-                                    st.info(f"  • Raw frame length: {len(points)}")
-                            
-                            # Extract coordinates based on the actual structure
-                            if hasattr(points, 'shape'):
-                                if len(points.shape) == 2:  # [coords, markers] or [markers, coords]
-                                    if points.shape[0] == 3:  # [3, n_markers] format
-                                        for marker_idx, label in enumerate(marker_labels):
-                                            if marker_idx < points.shape[1]:
-                                                x, y, z = points[0, marker_idx], points[1, marker_idx], points[2, marker_idx]
-                                                frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
-                                                frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
-                                                frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
-                                    elif points.shape[1] == 3:  # [n_markers, 3] format
-                                        for marker_idx, label in enumerate(marker_labels):
-                                            if marker_idx < points.shape[0]:
-                                                x, y, z = points[marker_idx, 0], points[marker_idx, 1], points[marker_idx, 2]
-                                                frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
-                                                frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
-                                                frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
-                                
-                                elif len(points.shape) == 1:  # Flattened array
-                                    # Assume format is [x1, y1, z1, x2, y2, z2, ...]
-                                    for marker_idx, label in enumerate(marker_labels):
-                                        if (marker_idx + 1) * 3 <= len(points):
-                                            x = points[marker_idx * 3]
-                                            y = points[marker_idx * 3 + 1]
-                                            z = points[marker_idx * 3 + 2]
-                                            frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
-                                            frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
-                                            frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
-                            
-                            # Fill with zeros if we couldn't extract data
-                            for label in marker_labels:
-                                if f"{label}_X" not in frame_data:
-                                    frame_data[f"{label}_X"] = 0.0
-                                    frame_data[f"{label}_Y"] = 0.0
-                                    frame_data[f"{label}_Z"] = 0.0
-                        
-                    except StopIteration:
-                        break
-                    except Exception as e:
-                        # Fill frame with zeros if extraction fails
-                        for label in marker_labels:
-                            frame_data[f"{label}_X"] = 0.0
-                            frame_data[f"{label}_Y"] = 0.0
-                            frame_data[f"{label}_Z"] = 0.0
-                    
-                    marker_data.append(frame_data)
-                    
-                    # Limit processing for very large files
-                    if frame_idx > 10000:
-                        st.warning(f"⚠️ Large file detected. Loaded first {frame_idx} frames.")
-                        break
-                
-            except Exception as read_error:
-                st.error(f"Raw reading failed: {str(read_error)}")
-                return None, None, None
-        
-        # Create DataFrame and validate
-        df = pd.DataFrame(marker_data)
-        
-        # Check if we got any coordinate data
-        coord_columns = [col for col in df.columns if col.endswith(('_X', '_Y', '_Z'))]
-        if len(coord_columns) == 0:
-            st.error("❌ Raw method: No coordinate data found")
-            return None, None, None
-        
-        # Check if we have actual non-zero data
-        coord_data = df[coord_columns]
-        if coord_data.abs().sum().sum() == 0:
-            st.warning("⚠️ Raw method: All coordinates are zero")
-        else:
-            st.success(f"✅ Raw method: Successfully extracted {len(coord_columns)} coordinate columns")
-        
-        return df, marker_labels, frame_rate
-        
-    except Exception as e:
-        st.error(f"Raw access method failed: {str(e)}")
         return None, None, None
 
 def create_mock_data():
@@ -910,7 +571,7 @@ def main():
             
             # If fixed method fails, try the original methods
             if df is None:
-                st.warning("Fixed method failed, trying original methods...")
+                st.warning("Fixed method failed, trying original method...")
                 df, markers, frame_rate = load_c3d_file(uploaded_file)
     else:
         # Use mock data for demonstration
