@@ -45,6 +45,64 @@ def calculate_angle_3d(p1, p2, p3):
     
     return angle_deg
 
+def load_c3d_file_alternative(uploaded_file):
+    """
+    Alternative C3D loading method using different approach
+    """
+    try:
+        # Reset file pointer
+        uploaded_file.seek(0)
+        bytes_data = uploaded_file.read()
+        file_obj = io.BytesIO(bytes_data)
+        
+        reader = c3d.Reader(file_obj)
+        
+        # Get basic info
+        frame_rate = reader.header.frame_rate
+        
+        # Alternative method: read all frames at once
+        frames = list(reader.read_frames())
+        
+        if not frames:
+            st.error("No frames found in C3D file")
+            return None, None, None
+        
+        # Get marker labels
+        marker_labels = []
+        for label in reader.point_labels:
+            cleaned_label = label.strip().replace('\x00', '')
+            if cleaned_label:
+                marker_labels.append(cleaned_label)
+        
+        # Process frames
+        marker_data = []
+        for frame_idx, frame_tuple in enumerate(frames):
+            points = frame_tuple[0] if len(frame_tuple) > 0 else None
+            
+            frame_data = {'frame': frame_idx}
+            
+            if points is not None and hasattr(points, 'shape') and len(points.shape) >= 2:
+                for marker_idx, label in enumerate(marker_labels):
+                    if marker_idx < points.shape[1] and points.shape[0] >= 3:
+                        try:
+                            x, y, z = float(points[0, marker_idx]), float(points[1, marker_idx]), float(points[2, marker_idx])
+                            frame_data[f"{label}_X"] = x if not np.isnan(x) else 0.0
+                            frame_data[f"{label}_Y"] = y if not np.isnan(y) else 0.0
+                            frame_data[f"{label}_Z"] = z if not np.isnan(z) else 0.0
+                        except:
+                            frame_data[f"{label}_X"] = 0.0
+                            frame_data[f"{label}_Y"] = 0.0
+                            frame_data[f"{label}_Z"] = 0.0
+            
+            marker_data.append(frame_data)
+        
+        df = pd.DataFrame(marker_data)
+        return df, marker_labels, frame_rate
+        
+    except Exception as e:
+        st.error(f"Alternative loading method also failed: {str(e)}")
+        return None, None, None
+
 def load_c3d_file(uploaded_file):
     """
     Load C3D file and extract marker data
@@ -186,7 +244,16 @@ def load_c3d_file(uploaded_file):
         return df, marker_labels, frame_rate
         
     except Exception as e:
-        st.error(f"Error loading C3D file: {str(e)}")
+        st.error(f"Primary C3D loading method failed: {str(e)}")
+        
+        # Try alternative loading method
+        st.info("🔄 Trying alternative loading method...")
+        try:
+            # Reset the uploaded file for the alternative method
+            uploaded_file.seek(0)
+            return load_c3d_file_alternative(uploaded_file)
+        except Exception as alt_error:
+            st.error(f"Alternative method also failed: {str(alt_error)}")
         
         # More detailed error information
         error_details = traceback.format_exc()
@@ -207,6 +274,8 @@ def load_c3d_file(uploaded_file):
             """)
         
         return None, None, None
+
+def load_c3d_file_alternative(uploaded_file):
 
 def create_mock_data():
     """
