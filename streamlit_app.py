@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import io
 import traceback
+import time
 
 # Try to import plotly with error handling
 try:
@@ -691,8 +692,7 @@ def main():
         
         # Calculate movement bounds for fixed scaling
         with st.spinner("Calculating movement bounds for optimal visualization..."):
-            # Use a basic debug for now to troubleshoot
-            movement_bounds = calculate_movement_bounds(df, markers, show_debug=True)
+            movement_bounds = calculate_movement_bounds(df, markers, show_debug=show_loading_details)
             if movement_bounds is None:
                 st.warning("⚠️ Could not calculate movement bounds. Using auto-scaling for plots.")
                 movement_bounds = None
@@ -724,22 +724,93 @@ def main():
         # Marker selection and frame control
         st.sidebar.header("Visualization Controls")
         
-        # Frame selector
+        # Frame selector and playback controls
         max_frame = len(df) - 1
-        current_frame = st.sidebar.slider("Frame", 0, max_frame, 0)
+        
+        # Initialize session state
+        if 'current_frame' not in st.session_state:
+            st.session_state.current_frame = 0
+        
+        # Ensure current frame is within bounds
+        st.session_state.current_frame = min(max_frame, max(0, st.session_state.current_frame))
+        
+        st.sidebar.subheader("Frame Navigation")
+        
+        # Navigation buttons
+        col1, col2, col3, col4 = st.sidebar.columns([1, 1, 1, 1])
+        with col1:
+            if st.button("⏪", help="Previous frame"):
+                st.session_state.current_frame = max(0, st.session_state.current_frame - 1)
+        with col2:
+            if st.button("▶️", help="Next frame"):
+                st.session_state.current_frame = min(max_frame, st.session_state.current_frame + 1)
+        with col3:
+            if st.button("⏭️", help="Skip forward 10 frames"):
+                st.session_state.current_frame = min(max_frame, st.session_state.current_frame + 10)
+        with col4:
+            if st.button("🔄", help="Reset to frame 0"):
+                st.session_state.current_frame = 0
+        
+        # Frame slider
+        new_frame = st.sidebar.slider("Frame", 0, max_frame, st.session_state.current_frame)
+        if new_frame != st.session_state.current_frame:
+            st.session_state.current_frame = new_frame
+        current_frame = st.session_state.current_frame
+        
+        # Quick jump options
+        st.sidebar.subheader("Quick Jump")
+        col1, col2, col3 = st.sidebar.columns([1, 1, 1])
+        with col1:
+            if st.button("Start", help="Jump to frame 0"):
+                st.session_state.current_frame = 0
+        with col2:
+            if st.button("Mid", help="Jump to middle frame"):
+                st.session_state.current_frame = max_frame // 2
+        with col3:
+            if st.button("End", help="Jump to last frame"):
+                st.session_state.current_frame = max_frame
+        
+        # Batch advance options
+        st.sidebar.subheader("Batch Navigation")
+        st.sidebar.markdown("*Click multiple times to advance through frames:*")
+        
+        col1, col2, col3 = st.sidebar.columns([1, 1, 1])
+        with col1:
+            if st.button("⏩ +5", help="Advance 5 frames"):
+                st.session_state.current_frame = min(max_frame, st.session_state.current_frame + 5)
+        with col2:
+            if st.button("⏩ +25", help="Advance 25 frames"):
+                st.session_state.current_frame = min(max_frame, st.session_state.current_frame + 25)
+        with col3:
+            if st.button("⏩ +100", help="Advance 100 frames"):
+                st.session_state.current_frame = min(max_frame, st.session_state.current_frame + 100)
+        
+        # Auto-advance with manual control
+        st.sidebar.subheader("Frame Range Preview")
+        
+        # Range selector for viewing multiple frames
+        if st.sidebar.checkbox("Show frame range", help="Navigate through a range of frames"):
+            start_frame = st.sidebar.number_input("Start frame", 0, max_frame, current_frame)
+            end_frame = st.sidebar.number_input("End frame", start_frame, max_frame, min(max_frame, start_frame + 50))
+            
+            # Quick frame buttons within range
+            st.sidebar.write("**Quick preview within range:**")
+            range_frames = list(range(int(start_frame), int(end_frame) + 1, max(1, (int(end_frame) - int(start_frame)) // 10)))
+            
+            frame_cols = st.sidebar.columns(min(5, len(range_frames)))
+            for i, frame_num in enumerate(range_frames[:5]):
+                with frame_cols[i]:
+                    if st.button(f"{frame_num}", key=f"frame_{frame_num}"):
+                        st.session_state.current_frame = frame_num
         
         # Show frame info
         st.sidebar.info(f"📍 **Frame {current_frame}** of {max_frame}")
+        st.sidebar.info(f"⏱️ **Time:** {current_frame / frame_rate:.2f}s / {max_frame / frame_rate:.2f}s")
+        st.sidebar.info(f"📊 **Progress:** {(current_frame / max_frame) * 100:.1f}%")
         
-        # Auto-play option
-        auto_play = st.sidebar.checkbox("Auto-play")
-        if auto_play:
-            current_frame = st.sidebar.number_input(
-                "Auto-play will cycle through frames", 
-                min_value=0, 
-                max_value=max_frame, 
-                value=current_frame
-            )
+        # Pro tip for animation viewing
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("💡 **Pro Tip:** Click the **Next frame (▶️)** button repeatedly to manually animate through the sequence!")
         
         # Main visualization tabs
         tab1, tab2, tab3, tab4 = st.tabs(["3D View", "Trajectories", "Angle Analysis", "Data Table"])
@@ -752,8 +823,6 @@ def main():
             with col2:
                 use_fixed_scale = st.checkbox("Fixed scale across frames", value=True, 
                                              help="Keep the same scale across all frames to better visualize movement")
-                debug_scaling = st.checkbox("Debug scaling", value=True,
-                                           help="Show debug info to troubleshoot fixed scaling")
                 
                 if use_fixed_scale and movement_bounds:
                     st.info("🔒 **Fixed scale:** Watch markers move relative to each other!")
@@ -764,7 +833,7 @@ def main():
             
             # Create and display 3D plot
             bounds_to_use = movement_bounds if use_fixed_scale else None
-            fig_3d = plot_3d_markers(df, markers, current_frame, bounds_to_use, show_debug=debug_scaling)
+            fig_3d = plot_3d_markers(df, markers, current_frame, bounds_to_use, show_debug=show_loading_details)
             st.plotly_chart(fig_3d, use_container_width=True)
             
             # Add helpful tip for fixed scaling
