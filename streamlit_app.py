@@ -204,7 +204,7 @@ def debug_c3d_structure(uploaded_file):
         st.error(traceback.format_exc())
         return None
 
-def load_c3d_specification_compliant(uploaded_file):
+def load_c3d_specification_compliant(uploaded_file, show_details=False):
     """
     C3D loading method that follows C3D.org specification exactly
     """
@@ -215,22 +215,12 @@ def load_c3d_specification_compliant(uploaded_file):
         
         reader = c3d.Reader(file_obj)
         
-        st.info("📋 **C3D.org Specification Compliant Loading**")
-        
-        # Get header information according to C3D spec
+        # Get header information
         header = reader.header
         frame_rate = header.frame_rate
         first_frame = header.first_frame
         last_frame = header.last_frame
         point_count = header.point_count
-        
-        st.info(f"  • Frame range: {first_frame} to {last_frame}")
-        st.info(f"  • Points per frame: {point_count}")
-        st.info(f"  • Frame rate: {frame_rate} Hz")
-        
-        # Based on debug output, there's no scale factor needed - values are in mm
-        point_scale = 1.0
-        st.info(f"  • Using point scale: {point_scale} (no scaling needed)")
         
         # Get marker labels
         marker_labels = []
@@ -239,60 +229,44 @@ def load_c3d_specification_compliant(uploaded_file):
             if cleaned_label:
                 marker_labels.append(cleaned_label)
         
-        st.info(f"  • Marker labels: {marker_labels}")
-        
-        # Extract data from frame iteration (since point_data doesn't exist)
-        st.info("✅ **Extracting from frame iteration based on your file structure**")
-        
+        # Extract data from frame iteration
         marker_data = []
         frame_idx = 0
+        
+        # Show progress message (always show basic progress)
+        progress_placeholder = st.empty()
+        total_frames = last_frame - first_frame + 1
+        progress_placeholder.info(f"🔄 Loading {len(marker_labels)} markers from {total_frames} frames...")
         
         for frame_tuple in reader.read_frames():
             frame_data = {'frame': frame_idx}
             
-            # Based on debug: frame_tuple has 3 items
-            # Item 0: int (frame number)
-            # Item 1: numpy array shape (3, 5) - our point data
-            # Item 2: numpy array shape (32, 10) - analog data
-            
             if isinstance(frame_tuple, tuple) and len(frame_tuple) >= 2:
-                point_data = frame_tuple[1]  # This is the (3, 5) array
-                
-                # Show structure for first frame
-                if frame_idx == 0:
-                    st.info(f"  • Point data shape: {point_data.shape}")
-                    st.info(f"  • Point data type: {point_data.dtype}")
-                    st.info(f"  • Raw sample (first marker): {point_data[0, :]}")
+                point_data = frame_tuple[1]  # This is the (n, 5) array
                 
                 # Extract coordinates for each marker
-                # point_data is shape (3, 5) where:
-                # - 3 rows = 3 markers (Hip, knee, ankle)
-                # - 5 columns = [X, Y, Z, residual, camera_contribution]
-                
                 for marker_idx, label in enumerate(marker_labels):
-                    if marker_idx < point_data.shape[0]:  # Should be < 3
+                    if marker_idx < point_data.shape[0]:
                         try:
                             # Extract X, Y, Z (first 3 columns)
-                            x = float(point_data[marker_idx, 0])  # X coordinate
-                            y = float(point_data[marker_idx, 1])  # Y coordinate  
-                            z = float(point_data[marker_idx, 2])  # Z coordinate
-                            residual = float(point_data[marker_idx, 3])  # Residual/confidence
+                            x = float(point_data[marker_idx, 0])
+                            y = float(point_data[marker_idx, 1])
+                            z = float(point_data[marker_idx, 2])
+                            residual = float(point_data[marker_idx, 3])
                             
-                            # Check if data is valid (positive residual usually means valid)
+                            # Check if data is valid
                             if residual > 0:
                                 frame_data[f"{label}_X"] = x
                                 frame_data[f"{label}_Y"] = y
                                 frame_data[f"{label}_Z"] = z
                                 frame_data[f"{label}_residual"] = residual
                             else:
-                                # Invalid/missing data
                                 frame_data[f"{label}_X"] = 0.0
                                 frame_data[f"{label}_Y"] = 0.0
                                 frame_data[f"{label}_Z"] = 0.0
                                 frame_data[f"{label}_residual"] = -1.0
                                 
-                        except Exception as e:
-                            st.error(f"  • Error extracting marker {label}: {e}")
+                        except Exception:
                             frame_data[f"{label}_X"] = 0.0
                             frame_data[f"{label}_Y"] = 0.0
                             frame_data[f"{label}_Z"] = 0.0
@@ -306,31 +280,27 @@ def load_c3d_specification_compliant(uploaded_file):
                         frame_data[f"{label}_Z"] = 0.0
             
             marker_data.append(frame_data)
-            
-            # Show sample data for key frames
-            if frame_idx in [0, 10, 99, 1000] or frame_idx % 1000 == 0:
-                sample_coords = {}
-                for label in marker_labels:
-                    x_val = frame_data.get(f"{label}_X", 0)
-                    if x_val != 0:  # Only show non-zero values
-                        sample_coords[f"{label}_X"] = x_val
-                        sample_coords[f"{label}_Y"] = frame_data.get(f"{label}_Y", 0)
-                        sample_coords[f"{label}_Z"] = frame_data.get(f"{label}_Z", 0)
-                
-                if sample_coords:
-                    st.info(f"  • Frame {frame_idx} coordinates: {sample_coords}")
-            
             frame_idx += 1
+            
+            # Update progress less frequently for better performance
+            if show_details and frame_idx % 200 == 0:
+                progress_placeholder.info(f"🔄 Loading... {frame_idx}/{total_frames} frames ({100*frame_idx/total_frames:.1f}%)")
+            elif not show_details and frame_idx % 500 == 0:
+                progress_placeholder.info(f"🔄 Loading {len(marker_labels)} markers... {100*frame_idx/total_frames:.0f}% complete")
             
             # Safety limit
             if frame_idx > 10000:
-                st.warning(f"⚠️ Large file detected. Loaded first {frame_idx} frames.")
+                if show_details:
+                    st.warning(f"⚠️ Large file detected. Loaded first {frame_idx} frames.")
                 break
+        
+        # Clear progress message
+        progress_placeholder.empty()
         
         # Create DataFrame
         df = pd.DataFrame(marker_data)
         
-        # Final validation
+        # Final validation and success message
         if df is not None and not df.empty:
             coord_columns = [col for col in df.columns if col.endswith(('_X', '_Y', '_Z'))]
             if coord_columns:
@@ -338,42 +308,58 @@ def load_c3d_specification_compliant(uploaded_file):
                 non_zero_count = (coord_data != 0).sum().sum()
                 total_count = coord_data.size
                 
-                st.success(f"✅ **C3D Spec Compliant Loading Complete**")
-                st.info(f"  • Extracted {len(coord_columns)} coordinate columns")
-                st.info(f"  • Non-zero values: {non_zero_count}/{total_count} ({100*non_zero_count/total_count:.1f}%)")
-                st.info(f"  • Total frames loaded: {len(df)}")
+                # Show concise success message
+                st.success(f"✅ **Successfully loaded C3D file!** {len(marker_labels)} markers • {len(df)} frames • {frame_rate} Hz")
                 
-                # Show actual values from key frames matching your debug output
-                key_frames = [0, 10, min(99, len(df)-1)]
-                for frame_num in key_frames:
-                    if frame_num < len(df):
-                        frame_sample = df.iloc[frame_num]
-                        # Use the first available marker instead of hardcoding "Hip"
-                        first_marker = marker_labels[0] if marker_labels else None
-                        if first_marker:
-                            x_val = frame_sample.get(f"{first_marker}_X", 0)
-                            y_val = frame_sample.get(f"{first_marker}_Y", 0)
-                            z_val = frame_sample.get(f"{first_marker}_Z", 0)
-                            
-                            # Only format if we have numeric values
-                            if isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float)):
-                                st.info(f"  • Frame {frame_num} {first_marker}: X={x_val:.1f}mm, Y={y_val:.1f}mm, Z={z_val:.1f}mm")
-                            else:
-                                st.info(f"  • Frame {frame_num} {first_marker}: X={x_val}, Y={y_val}, Z={z_val}")
-                        else:
-                            st.warning("  • No markers found to display sample coordinates")
+                # Put detailed info in an expandable section (always available but collapsed)
+                with st.expander("📊 **Loading Details** (Click to expand)", expanded=show_details):
+                    st.info(f"**File Information:**")
+                    st.write(f"  • Frame range: {first_frame} to {last_frame}")
+                    st.write(f"  • Frame rate: {frame_rate} Hz")
+                    st.write(f"  • Marker count: {len(marker_labels)}")
+                    st.write(f"  • Marker labels: {', '.join(marker_labels[:8])}{'...' if len(marker_labels) > 8 else ''}")
+                    
+                    st.info(f"**Data Quality:**")
+                    st.write(f"  • Coordinate columns: {len(coord_columns)}")
+                    st.write(f"  • Valid data points: {non_zero_count:,}/{total_count:,} ({100*non_zero_count/total_count:.1f}%)")
+                    
+                    # Show sample coordinates from key frames
+                    st.info(f"**Sample Coordinates:**")
+                    key_frames = [0, min(99, len(df)-1), len(df)-1] if len(df) > 1 else [0]
+                    first_marker = marker_labels[0] if marker_labels else None
+                    
+                    if first_marker:
+                        for frame_num in key_frames:
+                            if frame_num < len(df):
+                                frame_sample = df.iloc[frame_num]
+                                x_val = frame_sample.get(f"{first_marker}_X", 0)
+                                y_val = frame_sample.get(f"{first_marker}_Y", 0)
+                                z_val = frame_sample.get(f"{first_marker}_Z", 0)
+                                
+                                if isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float)):
+                                    st.write(f"  • Frame {frame_num} {first_marker}: X={x_val:.1f}, Y={y_val:.1f}, Z={z_val:.1f} mm")
                 
                 return df, marker_labels, frame_rate
             else:
-                st.error("❌ No coordinate columns found after extraction")
+                st.error("❌ No coordinate columns found in the file")
                 return None, None, None
         else:
-            st.error("❌ Failed to create DataFrame from C3D data")
+            st.error("❌ Failed to create data from C3D file")
             return None, None, None
             
     except Exception as e:
-        st.error(f"C3D specification compliant loading failed: {str(e)}")
-        st.error(traceback.format_exc())
+        st.error(f"❌ **C3D loading failed:** {str(e)}")
+        
+        # Put detailed error in expandable section
+        with st.expander("🔍 **Error Details** (Click to expand)", expanded=show_details):
+            st.code(traceback.format_exc())
+            st.markdown("""
+            **Common Solutions:**
+            - Ensure the file is a valid C3D format from Qualisys
+            - Try re-exporting the file from your motion capture software  
+            - Check that the file isn't corrupted
+            """)
+        
         return None, None, None
 
 def create_mock_data():
@@ -524,6 +510,13 @@ def main():
         help="Upload a C3D file containing biomechanical marker data"
     )
     
+    # Advanced options (always available)
+    with st.sidebar.expander("⚙️ Advanced Options"):
+        show_debug_info = st.checkbox("Show detailed file structure analysis", value=False, 
+                                     help="Display technical details about the C3D file structure")
+        show_loading_details = st.checkbox("Show detailed loading progress", value=False,
+                                          help="Display step-by-step loading information")
+    
     # Initialize data
     df = None
     markers = []
@@ -531,17 +524,17 @@ def main():
     
     if uploaded_file is not None:
         with st.spinner("Loading C3D file..."):
-            # First, show detailed debugging information
-            with st.expander("🔍 **Debug C3D File Structure** (Click to expand)", expanded=False):
-                debug_reader = debug_c3d_structure(uploaded_file)
+            # Show debug section only if requested
+            if show_debug_info:
+                with st.expander("🔍 **File Structure Analysis** (Click to expand)", expanded=False):
+                    debug_reader = debug_c3d_structure(uploaded_file)
             
-            # Try C3D specification compliant method first
-            st.info("🎯 **Attempting C3D.org specification compliant loading...**")
-            df, markers, frame_rate = load_c3d_specification_compliant(uploaded_file)
+            # Load the C3D file
+            df, markers, frame_rate = load_c3d_specification_compliant(uploaded_file, show_details=show_loading_details)
             
-            # If spec compliant method fails, use demo data as fallback
+            # If loading fails, fall back to demo data
             if df is None:
-                st.warning("C3D loading failed. Using demo data for testing.")
+                st.warning("⚠️ C3D loading failed. Loading demo data for interface testing.")
                 df, markers, frame_rate = create_mock_data()
     else:
         # Use mock data for demonstration
