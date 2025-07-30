@@ -1,98 +1,4 @@
-# Try alternative loading method
-        st.info("🔄 Trying alternative loading method...")
-        try:
-            # Reset the uploaded file for the alternative method
-            uploaded_file.seek(0)
-            result = load_c3d_file_alternative(uploaded_file)
-            if result[0] is not None:
-                coord_columns = [col for col in result[0].columns if col.endswith(('_X', '_Y', '_Z'))]
-                if len(coord_columns) > 0:
-                    return result
-        except Exception as alt_error:
-            st.error(f"Alternative method also failed: {str(alt_error)}")
-        
-        # Try third method - raw C3D access
-        st.info("🔄 Trying raw data access method...")
-        try:
-            uploaded_file.seek(0)
-            result = load_c3d_file_raw(uploaded_file)
-            if result[0] is not None:
-                return result
-        except Exception as raw_error:
-            st.error(f"Raw access method failed: {str(raw_error)}")
-        
-        # More detailed error information
-        error_details = traceback.format_exc()
-        
-        with st.expander("🔍 Detailed Error Information"):
-            st.code(error_details)
-            st.markdown("""
-            **Common C3D File Issues:**
-            - File format not supported by the c3d library
-            - Corrupted or incomplete file
-            - Different C3D version/format than expected
-            - File contains no valid marker data
-            - Data is stored in an unexpected format
-            
-            **Try:**
-            1. Export your file in a different C3D format from Qualisys
-            2. Check if the file opens in other C3D viewers
-            3. Use the demo data to test the application features
-            4. Try opening the file in Qualisys Track Manager and re-export
-            """)
-        
-        return None, None, None
-
-def load_c3d_file_raw(uploaded_file):
-    """
-    Raw C3D loading method - tries to access data structures directly
-    """
-    try:
-        # Reset file pointer
-        uploaded_file.seek(0)
-        bytes_data = uploaded_file.read()
-        file_obj = io.BytesIO(bytes_data)
-        
-        reader = c3d.Reader(file_obj)
-        
-        st.info("🔄 Raw method - inspecting C3D structure...")
-        
-        # Get basic info
-        frame_rate = reader.header.frame_rate
-        first_frame = reader.header.first_frame
-        last_frame = reader.header.last_frame
-        point_count = reader.header.point_count
-        
-        # Get marker labels
-        marker_labels = []
-        for label in reader.point_labels:
-            cleaned_label = label.strip().replace('\x00', '')
-            if cleaned_label:
-                marker_labels.append(cleaned_label)
-        
-        st.info(f"  • Will extract frames {first_frame} to {last_frame}")
-        st.info(f"  • Expected {point_count} points per frame")
-        
-        # Try accessing data through different methods
-        marker_data = []
-        
-        # Method 1: Try using reader parameters directly
-        if hasattr(reader, 'read'):
-            try:
-                # Reset reader
-                reader.seek(first_frame)
-                
-                for frame_idx in range(last_frame - first_frame + 1):
-                    frame_data = {'frame': frame_idx}
-                    
-                    try:
-                        # Try to read one frame
-                        frame_info = next(reader.read_frames())
-                        
-                        if isinstance(frame_info, tuple) and len(frame_info) > 0:
-                            points = frame_info[0]
-                            
-                    import streamlit as st
+import streamlit as st
 import numpy as np
 import pandas as pd
 import io
@@ -442,9 +348,21 @@ def load_c3d_file(uploaded_file):
             uploaded_file.seek(0)
             result = load_c3d_file_alternative(uploaded_file)
             if result[0] is not None:
-                return result
+                coord_columns = [col for col in result[0].columns if col.endswith(('_X', '_Y', '_Z'))]
+                if len(coord_columns) > 0:
+                    return result
         except Exception as alt_error:
             st.error(f"Alternative method also failed: {str(alt_error)}")
+        
+        # Try third method - raw C3D access
+        st.info("🔄 Trying raw data access method...")
+        try:
+            uploaded_file.seek(0)
+            result = load_c3d_file_raw(uploaded_file)
+            if result[0] is not None:
+                return result
+        except Exception as raw_error:
+            st.error(f"Raw access method failed: {str(raw_error)}")
         
         # More detailed error information
         error_details = traceback.format_exc()
@@ -457,13 +375,150 @@ def load_c3d_file(uploaded_file):
             - Corrupted or incomplete file
             - Different C3D version/format than expected
             - File contains no valid marker data
+            - Data is stored in an unexpected format
             
             **Try:**
             1. Export your file in a different C3D format from Qualisys
             2. Check if the file opens in other C3D viewers
             3. Use the demo data to test the application features
+            4. Try opening the file in Qualisys Track Manager and re-export
             """)
         
+        return None, None, None
+
+def load_c3d_file_raw(uploaded_file):
+    """
+    Raw C3D loading method - tries to access data structures directly
+    """
+    try:
+        # Reset file pointer
+        uploaded_file.seek(0)
+        bytes_data = uploaded_file.read()
+        file_obj = io.BytesIO(bytes_data)
+        
+        reader = c3d.Reader(file_obj)
+        
+        st.info("🔄 Raw method - inspecting C3D structure...")
+        
+        # Get basic info
+        frame_rate = reader.header.frame_rate
+        first_frame = reader.header.first_frame
+        last_frame = reader.header.last_frame
+        point_count = reader.header.point_count
+        
+        # Get marker labels
+        marker_labels = []
+        for label in reader.point_labels:
+            cleaned_label = label.strip().replace('\x00', '')
+            if cleaned_label:
+                marker_labels.append(cleaned_label)
+        
+        st.info(f"  • Will extract frames {first_frame} to {last_frame}")
+        st.info(f"  • Expected {point_count} points per frame")
+        
+        # Try accessing data through different methods
+        marker_data = []
+        
+        # Method 1: Try using reader parameters directly
+        if hasattr(reader, 'read'):
+            try:
+                # Reset reader
+                reader.seek(first_frame)
+                
+                for frame_idx in range(last_frame - first_frame + 1):
+                    frame_data = {'frame': frame_idx}
+                    
+                    try:
+                        # Try to read one frame
+                        frame_info = next(reader.read_frames())
+                        
+                        if isinstance(frame_info, tuple) and len(frame_info) > 0:
+                            points = frame_info[0]
+                            
+                            # Debug the structure
+                            if frame_idx == 0:
+                                st.info(f"  • Raw frame data type: {type(points)}")
+                                if hasattr(points, 'shape'):
+                                    st.info(f"  • Raw frame shape: {points.shape}")
+                                elif isinstance(points, (list, tuple)):
+                                    st.info(f"  • Raw frame length: {len(points)}")
+                            
+                            # Extract coordinates based on the actual structure
+                            if hasattr(points, 'shape'):
+                                if len(points.shape) == 2:  # [coords, markers] or [markers, coords]
+                                    if points.shape[0] == 3:  # [3, n_markers] format
+                                        for marker_idx, label in enumerate(marker_labels):
+                                            if marker_idx < points.shape[1]:
+                                                x, y, z = points[0, marker_idx], points[1, marker_idx], points[2, marker_idx]
+                                                frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
+                                                frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
+                                                frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
+                                    elif points.shape[1] == 3:  # [n_markers, 3] format
+                                        for marker_idx, label in enumerate(marker_labels):
+                                            if marker_idx < points.shape[0]:
+                                                x, y, z = points[marker_idx, 0], points[marker_idx, 1], points[marker_idx, 2]
+                                                frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
+                                                frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
+                                                frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
+                                
+                                elif len(points.shape) == 1:  # Flattened array
+                                    # Assume format is [x1, y1, z1, x2, y2, z2, ...]
+                                    for marker_idx, label in enumerate(marker_labels):
+                                        if (marker_idx + 1) * 3 <= len(points):
+                                            x = points[marker_idx * 3]
+                                            y = points[marker_idx * 3 + 1]
+                                            z = points[marker_idx * 3 + 2]
+                                            frame_data[f"{label}_X"] = float(x) if not np.isnan(x) else 0.0
+                                            frame_data[f"{label}_Y"] = float(y) if not np.isnan(y) else 0.0
+                                            frame_data[f"{label}_Z"] = float(z) if not np.isnan(z) else 0.0
+                            
+                            # Fill with zeros if we couldn't extract data
+                            for label in marker_labels:
+                                if f"{label}_X" not in frame_data:
+                                    frame_data[f"{label}_X"] = 0.0
+                                    frame_data[f"{label}_Y"] = 0.0
+                                    frame_data[f"{label}_Z"] = 0.0
+                        
+                    except StopIteration:
+                        break
+                    except Exception as e:
+                        # Fill frame with zeros if extraction fails
+                        for label in marker_labels:
+                            frame_data[f"{label}_X"] = 0.0
+                            frame_data[f"{label}_Y"] = 0.0
+                            frame_data[f"{label}_Z"] = 0.0
+                    
+                    marker_data.append(frame_data)
+                    
+                    # Limit processing for very large files
+                    if frame_idx > 10000:
+                        st.warning(f"⚠️ Large file detected. Loaded first {frame_idx} frames.")
+                        break
+                
+            except Exception as read_error:
+                st.error(f"Raw reading failed: {str(read_error)}")
+                return None, None, None
+        
+        # Create DataFrame and validate
+        df = pd.DataFrame(marker_data)
+        
+        # Check if we got any coordinate data
+        coord_columns = [col for col in df.columns if col.endswith(('_X', '_Y', '_Z'))]
+        if len(coord_columns) == 0:
+            st.error("❌ Raw method: No coordinate data found")
+            return None, None, None
+        
+        # Check if we have actual non-zero data
+        coord_data = df[coord_columns]
+        if coord_data.abs().sum().sum() == 0:
+            st.warning("⚠️ Raw method: All coordinates are zero")
+        else:
+            st.success(f"✅ Raw method: Successfully extracted {len(coord_columns)} coordinate columns")
+        
+        return df, marker_labels, frame_rate
+        
+    except Exception as e:
+        st.error(f"Raw access method failed: {str(e)}")
         return None, None, None
 
 def create_mock_data():
