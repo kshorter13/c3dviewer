@@ -395,7 +395,7 @@ def create_mock_data():
     df = pd.DataFrame(data)
     return df, markers, 100  # 100 Hz sample rate
 
-def calculate_movement_bounds(df, markers, padding_percent=15):
+def calculate_movement_bounds(df, markers, padding_percent=15, show_debug=False):
     """
     Calculate the min/max bounds for all marker movements with padding
     """
@@ -408,16 +408,26 @@ def calculate_movement_bounds(df, markers, padding_percent=15):
         z_col = f"{marker}_Z"
         
         if x_col in df.columns:
-            # Get non-zero values (valid coordinates)
-            x_values = df[x_col][df[x_col] != 0].values
-            y_values = df[y_col][df[y_col] != 0].values
-            z_values = df[z_col][df[z_col] != 0].values
+            # Get values that are not exactly zero OR not NaN (be less strict)
+            x_values = df[x_col][(df[x_col] != 0) & (~df[x_col].isna())].values
+            y_values = df[y_col][(df[y_col] != 0) & (~df[y_col].isna())].values
+            z_values = df[z_col][(df[z_col] != 0) & (~df[z_col].isna())].values
+            
+            # Also try getting ALL values if strict filtering gives us nothing
+            if len(x_values) == 0:
+                x_values = df[x_col][~df[x_col].isna()].values
+            if len(y_values) == 0:
+                y_values = df[y_col][~df[y_col].isna()].values  
+            if len(z_values) == 0:
+                z_values = df[z_col][~df[z_col].isna()].values
             
             all_x.extend(x_values)
             all_y.extend(y_values)
             all_z.extend(z_values)
     
     if not all_x:  # No valid data found
+        if show_debug:
+            st.error("⚠️ No valid coordinate data found for bounds calculation")
         return None
     
     # Calculate min/max for each axis
@@ -440,13 +450,47 @@ def calculate_movement_bounds(df, markers, padding_percent=15):
         'z_range': [z_min - z_padding, z_max + z_padding]
     }
     
+    # Debug info (only if requested)
+    if show_debug:
+        with st.expander("🔍 **Bounds Calculation Debug**", expanded=True):
+            st.info(f"**Raw coordinate ranges:**")
+            st.write(f"  • Found {len(all_x)} valid X coordinates: {x_min:.1f} to {x_max:.1f}")
+            st.write(f"  • Found {len(all_y)} valid Y coordinates: {y_min:.1f} to {y_max:.1f}")
+            st.write(f"  • Found {len(all_z)} valid Z coordinates: {z_min:.1f} to {z_max:.1f}")
+            
+            st.info(f"**Final bounds with {padding_percent}% padding:**")
+            st.write(f"  • X: [{bounds['x_range'][0]:.1f}, {bounds['x_range'][1]:.1f}]")
+            st.write(f"  • Y: [{bounds['y_range'][0]:.1f}, {bounds['y_range'][1]:.1f}]")
+            st.write(f"  • Z: [{bounds['z_range'][0]:.1f}, {bounds['z_range'][1]:.1f}]")
+            
+            # Show a few sample coordinates
+            st.info("**Sample coordinates from first few markers/frames:**")
+            for i, marker in enumerate(markers[:3]):
+                for frame_idx in [0, 1, 2]:
+                    if frame_idx < len(df):
+                        x_val = df.iloc[frame_idx][f"{marker}_X"]
+                        y_val = df.iloc[frame_idx][f"{marker}_Y"] 
+                        z_val = df.iloc[frame_idx][f"{marker}_Z"]
+                        st.write(f"    • {marker} frame {frame_idx}: ({x_val:.1f}, {y_val:.1f}, {z_val:.1f})")
+    
     return bounds
 
-def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
+def plot_3d_markers(df, markers, frame_idx, movement_bounds=None, show_debug=False):
     """
-    Create 3D plot of marker positions for a specific frame with fixed scaling
+    Create 3D plot of marker positions for a specific frame with optional fixed scaling
     """
     fig = go.Figure()
+    
+    # Debug info (only if requested)
+    if show_debug:
+        with st.expander("🔍 **Plot Debug Info**", expanded=True):
+            if movement_bounds:
+                st.info(f"**Using fixed bounds:**")
+                st.write(f"  • X range: {movement_bounds['x_range']}")
+                st.write(f"  • Y range: {movement_bounds['y_range']}")
+                st.write(f"  • Z range: {movement_bounds['z_range']}")
+            else:
+                st.info(f"**No bounds provided, using auto-scale**")
     
     # Plot each marker
     for marker in markers:
@@ -458,6 +502,10 @@ def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
             x = df.iloc[frame_idx][x_col]
             y = df.iloc[frame_idx][y_col]
             z = df.iloc[frame_idx][z_col]
+            
+            # Debug: Show coordinates for first few markers (only if debug is on)
+            if show_debug and len(fig.data) < 3:
+                st.write(f"  • {marker} at frame {frame_idx}: ({x:.1f}, {y:.1f}, {z:.1f})")
             
             # Only plot if coordinates are valid (non-zero)
             if x != 0 or y != 0 or z != 0:
@@ -471,7 +519,7 @@ def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
                     showlegend=True
                 ))
     
-    # Set up the layout with fixed axis ranges if bounds are provided
+    # Set up the layout with optional fixed axis ranges
     scene_dict = {
         'xaxis_title': 'X (mm)',
         'yaxis_title': 'Y (mm)',
@@ -479,15 +527,21 @@ def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
         'aspectmode': 'cube'
     }
     
+    # Set title based on whether fixed scaling is being used
+    title_suffix = " (Fixed Scale)" if movement_bounds else " (Auto Scale)"
+    
     if movement_bounds:
         scene_dict.update({
             'xaxis': dict(range=movement_bounds['x_range'], title='X (mm)'),
             'yaxis': dict(range=movement_bounds['y_range'], title='Y (mm)'),
             'zaxis': dict(range=movement_bounds['z_range'], title='Z (mm)')
         })
+        
+        if show_debug:
+            st.write(f"**Applied axis ranges:** X: {movement_bounds['x_range']}, Y: {movement_bounds['y_range']}, Z: {movement_bounds['z_range']}")
     
     fig.update_layout(
-        title=f'3D Marker Positions - Frame {frame_idx}',
+        title=f'3D Marker Positions - Frame {frame_idx}{title_suffix}',
         scene=scene_dict,
         height=600,
         legend=dict(
@@ -503,7 +557,7 @@ def plot_3d_markers(df, markers, frame_idx, movement_bounds=None):
 
 def plot_trajectory(df, markers, selected_markers, movement_bounds=None):
     """
-    Plot trajectory of selected markers over time with fixed scaling
+    Plot trajectory of selected markers over time with optional fixed scaling
     """
     fig = go.Figure()
     
@@ -527,13 +581,16 @@ def plot_trajectory(df, markers, selected_markers, movement_bounds=None):
                     marker=dict(size=3)
                 ))
     
-    # Set up the layout with fixed axis ranges if bounds are provided
+    # Set up the layout with optional fixed axis ranges
     scene_dict = {
         'xaxis_title': 'X (mm)',
         'yaxis_title': 'Y (mm)',
         'zaxis_title': 'Z (mm)',
         'aspectmode': 'cube'
     }
+    
+    # Set title based on whether fixed scaling is being used
+    title_suffix = " (Fixed Scale)" if movement_bounds else " (Auto Scale)"
     
     if movement_bounds:
         scene_dict.update({
@@ -543,7 +600,7 @@ def plot_trajectory(df, markers, selected_markers, movement_bounds=None):
         })
     
     fig.update_layout(
-        title='Marker Trajectories',
+        title=f'Marker Trajectories{title_suffix}',
         scene=scene_dict,
         height=600
     )
@@ -632,6 +689,14 @@ def main():
     if df is not None and len(markers) > 0:
         st.success(f"Data loaded successfully! {len(markers)} markers, {len(df)} frames")
         
+        # Calculate movement bounds for fixed scaling
+        with st.spinner("Calculating movement bounds for optimal visualization..."):
+            # Use a basic debug for now to troubleshoot
+            movement_bounds = calculate_movement_bounds(df, markers, show_debug=True)
+            if movement_bounds is None:
+                st.warning("⚠️ Could not calculate movement bounds. Using auto-scaling for plots.")
+                movement_bounds = None
+        
         # Display basic info
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -641,12 +706,30 @@ def main():
         with col3:
             st.metric("Frame Rate", f"{frame_rate} Hz")
         
+        # Show movement bounds info
+        if movement_bounds:
+            with st.expander("📏 **Movement Bounds** (Click to expand)", expanded=False):
+                st.info("**3D plots use fixed scaling to show relative movement:**")
+                st.write(f"• X range: {movement_bounds['x_range'][0]:.1f} to {movement_bounds['x_range'][1]:.1f} mm")
+                st.write(f"• Y range: {movement_bounds['y_range'][0]:.1f} to {movement_bounds['y_range'][1]:.1f} mm") 
+                st.write(f"• Z range: {movement_bounds['z_range'][0]:.1f} to {movement_bounds['z_range'][1]:.1f} mm")
+                st.write("*Includes 15% padding around actual movement area*")
+                
+                # Show movement area dimensions
+                x_span = movement_bounds['x_range'][1] - movement_bounds['x_range'][0]
+                y_span = movement_bounds['y_range'][1] - movement_bounds['y_range'][0]
+                z_span = movement_bounds['z_range'][1] - movement_bounds['z_range'][0]
+                st.write(f"• **Movement area:** {x_span:.0f} × {y_span:.0f} × {z_span:.0f} mm")
+        
         # Marker selection and frame control
         st.sidebar.header("Visualization Controls")
         
         # Frame selector
         max_frame = len(df) - 1
         current_frame = st.sidebar.slider("Frame", 0, max_frame, 0)
+        
+        # Show frame info
+        st.sidebar.info(f"📍 **Frame {current_frame}** of {max_frame}")
         
         # Auto-play option
         auto_play = st.sidebar.checkbox("Auto-play")
@@ -664,9 +747,29 @@ def main():
         with tab1:
             st.header("3D Marker Positions")
             
+            # Add visualization options
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                use_fixed_scale = st.checkbox("Fixed scale across frames", value=True, 
+                                             help="Keep the same scale across all frames to better visualize movement")
+                debug_scaling = st.checkbox("Debug scaling", value=True,
+                                           help="Show debug info to troubleshoot fixed scaling")
+                
+                if use_fixed_scale and movement_bounds:
+                    st.info("🔒 **Fixed scale:** Watch markers move relative to each other!")
+                elif not movement_bounds:
+                    st.warning("⚠️ Auto-scaling (no bounds calculated)")
+                else:
+                    st.info("📏 **Auto-scaling:** Scale adjusts to current frame")
+            
             # Create and display 3D plot
-            fig_3d = plot_3d_markers(df, markers, current_frame)
+            bounds_to_use = movement_bounds if use_fixed_scale else None
+            fig_3d = plot_3d_markers(df, markers, current_frame, bounds_to_use, show_debug=debug_scaling)
             st.plotly_chart(fig_3d, use_container_width=True)
+            
+            # Add helpful tip for fixed scaling
+            if use_fixed_scale and movement_bounds:
+                st.info("💡 **Tip:** Use the frame slider in the sidebar to see how markers move through the fixed 3D space!")
             
             # Show marker coordinates for current frame
             st.subheader("Marker Coordinates (Current Frame)")
@@ -676,14 +779,23 @@ def main():
                 y_col = f"{marker}_Y"
                 z_col = f"{marker}_Z"
                 if x_col in df.columns:
-                    coord_data.append({
-                        'Marker': marker,
-                        'X': f"{df.iloc[current_frame][x_col]:.3f}",
-                        'Y': f"{df.iloc[current_frame][y_col]:.3f}",
-                        'Z': f"{df.iloc[current_frame][z_col]:.3f}"
-                    })
+                    x_val = df.iloc[current_frame][x_col]
+                    y_val = df.iloc[current_frame][y_col]
+                    z_val = df.iloc[current_frame][z_col]
+                    
+                    # Only show markers with valid (non-zero) coordinates
+                    if x_val != 0 or y_val != 0 or z_val != 0:
+                        coord_data.append({
+                            'Marker': marker,
+                            'X': f"{x_val:.1f}",
+                            'Y': f"{y_val:.1f}",
+                            'Z': f"{z_val:.1f}"
+                        })
             
-            st.dataframe(pd.DataFrame(coord_data), use_container_width=True)
+            if coord_data:
+                st.dataframe(pd.DataFrame(coord_data), use_container_width=True)
+            else:
+                st.info("No valid marker coordinates found for this frame.")
         
         with tab2:
             st.header("Marker Trajectories")
@@ -696,8 +808,48 @@ def main():
             )
             
             if selected_markers:
-                fig_traj = plot_trajectory(df, markers, selected_markers)
+                # Add option for fixed scaling
+                col1, col2 = st.columns([3, 1])
+                with col2:
+                    use_fixed_scale_traj = st.checkbox("Fixed scale for trajectories", value=True,
+                                                      help="Use the same scale as the 3D view for consistency")
+                
+                bounds_to_use = movement_bounds if use_fixed_scale_traj else None
+                fig_traj = plot_trajectory(df, markers, selected_markers, bounds_to_use)
                 st.plotly_chart(fig_traj, use_container_width=True)
+                
+                # Show trajectory statistics
+                if len(selected_markers) > 0:
+                    st.subheader("Movement Statistics")
+                    stats_data = []
+                    
+                    for marker in selected_markers:
+                        x_col = f"{marker}_X"
+                        y_col = f"{marker}_Y"
+                        z_col = f"{marker}_Z"
+                        
+                        if x_col in df.columns:
+                            # Calculate movement statistics for non-zero values
+                            x_vals = df[x_col][df[x_col] != 0]
+                            y_vals = df[y_col][df[y_col] != 0]
+                            z_vals = df[z_col][df[z_col] != 0]
+                            
+                            if len(x_vals) > 0:
+                                x_range = x_vals.max() - x_vals.min()
+                                y_range = y_vals.max() - y_vals.min()
+                                z_range = z_vals.max() - z_vals.min()
+                                total_range = (x_range**2 + y_range**2 + z_range**2)**0.5
+                                
+                                stats_data.append({
+                                    'Marker': marker,
+                                    'X Range (mm)': f"{x_range:.1f}",
+                                    'Y Range (mm)': f"{y_range:.1f}",
+                                    'Z Range (mm)': f"{z_range:.1f}",
+                                    '3D Range (mm)': f"{total_range:.1f}"
+                                })
+                    
+                    if stats_data:
+                        st.dataframe(pd.DataFrame(stats_data), use_container_width=True)
         
         with tab3:
             st.header("Joint Angle Analysis")
